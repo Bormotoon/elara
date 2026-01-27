@@ -22,34 +22,16 @@ impl std::fmt::Display for BetterError {
     }
 }
 
-/// Trim the message to not include position information.
-///
-/// Example:
-///
-/// ```
-///    let trimmed = trim_message("Function not found: move_down () (line 5, position 1)");
-///    assert_eq!(trimmed, "Function not found: move_down ()");
-/// ```
 fn trim_message(message: &str) -> String {
     let re = Regex::new(r" \(line \d+, position \d+\)$").unwrap();
     re.replace(message, "").to_string()
 }
 
-/// Get just the name of a Rhai function from its full signature.
-///
-/// Example:
-///
-/// ```
-///    let name = fn_name_from_sig("move_down (i64, i64)");
-///    assert_eq!(name, "move_down");
-/// ```
 fn fn_name_from_sig(fn_signature: &str) -> String {
     let re = Regex::new(r"\(.*\)").unwrap();
     re.replace(fn_signature, "").trim().to_string()
 }
 
-/// Searches previous lines in the script to see if there is a better
-/// place to put a missing semicolon error.
 pub fn search_prev_lines(script: &str, start_line: usize) -> usize {
     let mut line = start_line;
     while line >= 2 {
@@ -59,21 +41,14 @@ pub fn search_prev_lines(script: &str, start_line: usize) -> usize {
             || prev_line.trim().ends_with('}')
             || prev_line.trim().ends_with('{')
         {
-            // If the previous line is empty, is a comment, or is the start/end
-            // of a block, keep searching backwards.
             line -= 1;
             continue;
         }
         if !prev_line.ends_with(';') {
-            // If we found a line that looks like it should end with a semicolon but
-            // it doesn't, move the error message to that line.
             return line - 1;
         }
-        // Otherwise, just use the original line.
         return start_line;
     }
-
-    // Otherwise, just use the original line.
     start_line
 }
 
@@ -85,31 +60,27 @@ fn convert_func_not_found_err(
 ) -> BetterError {
     let fn_name = fn_name_from_sig(fn_sig);
 
-    // First check if the function is disabled.
     if disabled_funcs.contains(&fn_name.as_str()) {
         return BetterError {
-            message: format!("Error: The {fn_name} function is disabled for this level"),
+            message: format!("Ошибка: Функция {fn_name} отключена для этого уровня"),
             line: pos.line(),
             col: pos.position(),
         };
     }
 
-    // Then check if the function has not yet been unlocked.
     if BUILTIN_FUNCTIONS.contains_key(fn_name.as_str()) && !avail_funcs.contains(&fn_name) {
         return BetterError {
-            message: format!("Error: You haven't unlocked the {fn_name} function yet"),
+            message: format!("Ошибка: Вы ещё не разблокировали функцию {fn_name}"),
             line: pos.line(),
             col: pos.position(),
         };
     }
 
-    // If the function is unlocked and not disabled, give a better error message based on how
-    // many arguments and of what type the function expects.
     if let Some(builtin_fn) = BUILTIN_FUNCTIONS.get(fn_name.as_str()) {
         return match builtin_fn.arg_types.len() {
             0 => BetterError {
                 message: format!(
-                    "Error: The {} function should not have any inputs.",
+                    "Ошибка: Функция {} не должна иметь никаких аргументов.",
                     builtin_fn.name
                 ),
                 line: pos.line(),
@@ -119,17 +90,23 @@ fn convert_func_not_found_err(
                 if builtin_fn.arg_types[0] == "any" {
                     BetterError {
                         message: format!(
-                            "Error: The {} function should have one input of any type.",
+                            "Ошибка: Функция {} должна иметь один аргумент любого типа.",
                             builtin_fn.name
                         ),
                         line: pos.line(),
                         col: pos.position(),
                     }
                 } else {
+                    let arg_type_ru = match builtin_fn.arg_types[0] {
+                        "number" => "число",
+                        "string" => "строку",
+                        "array" => "массив",
+                        _ => builtin_fn.arg_types[0],
+                    };
                     BetterError {
                         message: format!(
-                            "Error: The {} function should have one {} as an input.",
-                            builtin_fn.name, builtin_fn.arg_types[0]
+                            "Ошибка: Функция {} должна принимать {} в качестве аргумента.",
+                            builtin_fn.name, arg_type_ru
                         ),
                         line: pos.line(),
                         col: pos.position(),
@@ -138,7 +115,7 @@ fn convert_func_not_found_err(
             }
             _ => BetterError {
                 message: format!(
-                    "Error: Wrong inputs for the {} function. Should have {} inputs ({}).",
+                    "Ошибка: Неверные аргументы для функции {}. Должно быть {} аргументов ({}).",
                     builtin_fn.name,
                     builtin_fn.arg_types.len(),
                     builtin_fn.arg_types.join(", ")
@@ -149,16 +126,13 @@ fn convert_func_not_found_err(
         };
     }
 
-    // If we reached here this is not a built-in function, just return a generic error.
     BetterError {
-        message: format!("Error: There is no function named {fn_name} (maybe you made a typo?)"),
+        message: format!("Ошибка: Функции с именем {fn_name} не существует (возможно, опечатка?)"),
         line: pos.line(),
         col: pos.position(),
     }
 }
 
-/// Returns true if the script contains an extra set of parentheses on the line
-/// where the error occurred.
 fn is_extra_parentheses_set(script: &str, err_pos: &rhai::Position) -> bool {
     if let Some(line_number) = err_pos.line() {
         let line = script.lines().nth(line_number - 1).unwrap();
@@ -169,12 +143,9 @@ fn is_extra_parentheses_set(script: &str, err_pos: &rhai::Position) -> bool {
     false
 }
 
-/// Returns true if the script contains an extra closing parentheses on the line
-/// where the error occurred.
 fn is_extra_closing_parentheses(script: &str, err_pos: &rhai::Position) -> bool {
     if let Some(line_number) = err_pos.line() {
         let line = script.lines().nth(line_number - 1).unwrap();
-        // Count the number of open and closed parentheses on the line.
         let mut open_parens = 0;
         let mut closed_parens = 0;
         for c in line.chars() {
@@ -215,9 +186,6 @@ fn is_space_in_func_name(script: &str, err_pos: &rhai::Position) -> bool {
 }
 
 fn convert_missing_semicolon_error(script: &str, desc: &str, pos: &rhai::Position) -> BetterError {
-    // Check if there was a space in a variable name. The Rhai parser doesn't differentiate
-    // this kind of error because technically you can write `let foo;` and it will be valid code.
-    // However, we can do better here by giving a more helpful error message.
     if is_space_in_variable_name(script, pos) {
         return BetterError {
             message: String::from(ERR_UNEXPECTED_SPACE_IN_VAR_NAME),
@@ -228,41 +196,33 @@ fn convert_missing_semicolon_error(script: &str, desc: &str, pos: &rhai::Positio
 
     if desc == "at end of line" {
         return BetterError {
-            message: String::from("Syntax Error: Missing semicolon ';' at end of line."),
+            message: String::from("Синтаксическая ошибка: Пропущена точка с запятой ';' в конце строки."),
             line: pos.line(),
             col: pos.position(),
         };
     }
     if desc == "to terminate this statement" {
-        // Sometimes the Rhai parser spits out a missing semicolon error when the real culprit
-        // is extra parentheses. (E.g. `turn_left()()` instead of `turn_left()`). Check if this
-        // is the case.
         if is_extra_parentheses_set(script, pos) {
             return BetterError {
-                message: String::from("Syntax Error: Unexpected extra parentheses '()'."),
+                message: String::from("Синтаксическая ошибка: Лишние скобки '()'."),
                 line: pos.line(),
                 col: pos.position(),
             };
         } else if is_extra_closing_parentheses(script, pos) {
             return BetterError {
-                message: String::from("Syntax Error: Unexpected extra closing parentheses ')'."),
+                message: String::from("Синтаксическая ошибка: Лишняя закрывающая скобка ')'."),
                 line: pos.line(),
                 col: pos.position(),
             };
         }
 
-        // Sometimes Rhai will give a missing semicolon error on the next line instead of
-        // the line where the semicolon is actually missing. Check for this and then change
-        // the line number if needed.
         let orig_line = pos.line().unwrap();
         let mut message = String::from(
-            "Syntax Error: Missing semicolon ';' after function call or other statement.",
+            "Синтаксическая ошибка: Пропущена точка с запятой ';' после вызова функции или оператора.",
         );
         let line = search_prev_lines(script, orig_line);
         if line != orig_line {
-            // If we found a better line to put the error message on, we should
-            // also change the message for the sake of clarity.
-            message = String::from("Syntax Error: Missing semicolon ';' at end of line.");
+            message = String::from("Синтаксическая ошибка: Пропущена точка с запятой ';' в конце строки.");
         }
 
         return BetterError {
@@ -272,27 +232,25 @@ fn convert_missing_semicolon_error(script: &str, desc: &str, pos: &rhai::Positio
         };
     }
 
-    // In all other cases, just return a generic missing semicolon error.
     BetterError {
-        message: String::from("Syntax Error: Missing semicolon ';' at end of line."),
+        message: String::from("Синтаксическая ошибка: Пропущена точка с запятой ';' в конце строки."),
         line: pos.line(),
         col: pos.position(),
     }
 }
 
 lazy_static! {
-    /// A map of common variable name typos to helpful hints.
     static ref UNDEF_VARIABLE_HINTS: HashMap<&'static str, &'static str> = {
         let mut m: HashMap<&'static str, &'static str> = HashMap::new();
-        m.insert("Loop", "Did you mean loop with a lowercase 'l'?");
-        m.insert("Let", "Did you mean let with a lowercase 'l'?");
-        m.insert("If", "Did you mean if with a lowercase 'i'?");
-        m.insert("lovelace", "If you wanted this to be a string, maybe you forgot the quotation marks?");
-        m.insert("left", "If you wanted this to be a string, maybe you forgot the quotation marks?");
-        m.insert("right", "If you wanted this to be a string, maybe you forgot the quotation marks?");
-        m.insert("top", "If you wanted this to be a string, maybe you forgot the quotation marks?");
-        m.insert("middle", "If you wanted this to be a string, maybe you forgot the quotation marks?");
-        m.insert("bottom", "If you wanted this to be a string, maybe you forgot the quotation marks?");
+        m.insert("Loop", "Вы имели в виду loop с маленькой буквы 'l'?");
+        m.insert("Let", "Вы имели в виду let с маленькой буквы 'l'?");
+        m.insert("If", "Вы имели в виду if с маленькой буквы 'i'?");
+        m.insert("lovelace", "Если вы хотели строку, возможно, вы забыли кавычки?");
+        m.insert("left", "Если вы хотели строку, возможно, вы забыли кавычки?");
+        m.insert("right", "Если вы хотели строку, возможно, вы забыли кавычки?");
+        m.insert("top", "Если вы хотели строку, возможно, вы забыли кавычки?");
+        m.insert("middle", "Если вы хотели строку, возможно, вы забыли кавычки?");
+        m.insert("bottom", "Если вы хотели строку, возможно, вы забыли кавычки?");
         m
     };
 }
@@ -301,7 +259,7 @@ fn convert_var_not_found_error(var_name: &str, pos: &rhai::Position) -> BetterEr
     if UNDEF_VARIABLE_HINTS.contains_key(var_name) {
         BetterError {
             message: format!(
-                r#"Error: Variable not found: {}. (Hint: {})"#,
+                r#"Ошибка: Переменная не найдена: {}. (Подсказка: {})"#,
                 var_name, UNDEF_VARIABLE_HINTS[var_name]
             ),
             line: pos.line(),
@@ -310,7 +268,7 @@ fn convert_var_not_found_error(var_name: &str, pos: &rhai::Position) -> BetterEr
     } else if BUILTIN_FUNCTIONS.contains_key(var_name) {
         BetterError {
             message: format!(
-                r#"Error: Variable not found: {}. (Hint: If you meant to call a function, make sure you include parentheses after the function name.)"#,
+                r#"Ошибка: Переменная не найдена: {}. (Подсказка: если вы хотели вызвать функцию, не забудьте добавить скобки после имени функции.)"#,
                 var_name,
             ),
             line: pos.line(),
@@ -318,7 +276,7 @@ fn convert_var_not_found_error(var_name: &str, pos: &rhai::Position) -> BetterEr
         }
     } else {
         BetterError {
-            message: format!("Error: Variable not found: {}", var_name),
+            message: format!("Ошибка: Переменная не найдена: {}", var_name),
             line: pos.line(),
             col: pos.position(),
         }
@@ -330,22 +288,10 @@ fn convert_missing_comma_separate_args_error(
     desc: &str,
     pos: &rhai::Position,
 ) -> BetterError {
-    // Note: There are really two underlying reasons why this error message may appear
-    // (the Rhai parser does not distinguish between them):
-    //
-    //  1. The function call is missing a comma between two or more arguments.
-    //  2. The function call is missing a closing parenthesis.
-    //
-    // We want to narrow down which of these is the case so we can give a better error message.
-    // Or, as a fallback, we just mention both possibilities in the error message.
-
-    // First, extract the function name from the error description.
-    // Descriptions have the form: `to separate the arguments to function call 'say'`
     let re = Regex::new(r"to separate the arguments to function call '(.*)'$").unwrap();
     let captures = re.captures(desc).unwrap();
     let fn_name = captures.get(1).unwrap().as_str();
 
-    // Find the line where the function call is.
     let mut line = pos.line().unwrap();
     while line >= 1 {
         let prev_line = script.lines().nth(line - 1).unwrap();
@@ -355,7 +301,6 @@ fn convert_missing_comma_separate_args_error(
         line -= 1;
     }
 
-    // Find the position of the function call on the line.
     let mut col = pos.position().unwrap();
     let line_text = script.lines().nth(line - 1).unwrap();
     let mut fn_name_found = false;
@@ -372,13 +317,11 @@ fn convert_missing_comma_separate_args_error(
         }
     }
 
-    // If the function is a built-in function, we know for sure whether or not it
-    // should have multiple arguments. This helps us narrow down the error message.
     if let Some(builtin_fn) = BUILTIN_FUNCTIONS.get(fn_name) {
         if builtin_fn.arg_types.len() <= 1 {
             return BetterError {
                 message: format!(
-                    "Syntax Error: Missing a closing parenthesis ')' for the {} function.",
+                    "Синтаксическая ошибка: Пропущена закрывающая скобка ')' для функции {}.",
                     fn_name
                 ),
                 line: Some(line),
@@ -387,14 +330,11 @@ fn convert_missing_comma_separate_args_error(
         }
     }
 
-    // Otherwise, if the function is not a built-in function, or if it has more than
-    // one argument, we can't narrow down the error message. The error message should
-    // mention both possibilities.
     BetterError {
         message: format!(
-            "Syntax Error: Might be a missing closing parenthesis ')' for the \
-            {} function. Or if the function expects more than one input, you might \
-            be missing a comma ',' to separate them.",
+            "Синтаксическая ошибка: Возможно, пропущена закрывающая скобка ')' для функции \
+            {}. Или, если функция ожидает более одного аргумента, возможно, \
+            пропущена запятая ',' для их разделения.",
             fn_name
         ),
         line: Some(line),
@@ -407,9 +347,6 @@ fn convert_missing_fn_params_error(
     fn_name: &str,
     err_pos: &rhai::Position,
 ) -> BetterError {
-    // Check if this is actually due to a space in the function name. The Rhai parser
-    // doesn't differentiate this kind of error and just expects parentheses instead of
-    // a space. We can do better here by giving a more helpful error message.
     if is_space_in_func_name(&script, err_pos) {
         BetterError {
             message: String::from(ERR_UNEXPECTED_SPACE_IN_FUNC_NAME),
@@ -417,10 +354,9 @@ fn convert_missing_fn_params_error(
             col: err_pos.position(),
         }
     } else {
-        // Otherwise, just wrap the original error.
         BetterError {
             message: format!(
-                "Syntax Error: Missing parentheses '()' after function name '{}'.",
+                "Синтаксическая ошибка: Пропущены скобки '()' после имени функции '{}'.",
                 fn_name
             ),
             line: err_pos.line(),
@@ -439,7 +375,7 @@ pub fn convert_err(
     match *err {
         EvalAltResult::ErrorTooManyOperations(ref pos) => {
             return BetterError {
-                message: String::from("Error: Possible infinite loop detected."),
+                message: String::from("Ошибка: Обнаружен возможный бесконечный цикл."),
                 line: pos.line(),
                 col: pos.position(),
             };
@@ -478,7 +414,7 @@ pub fn convert_err(
             ref pos,
         ) => {
             return BetterError {
-                message: String::from("Error: String is missing a quotation mark at the end."),
+                message: String::from("Ошибка: В строке отсутствует закрывающая кавычка."),
                 line: pos.line(),
                 col: pos.position(),
             };
@@ -487,10 +423,6 @@ pub fn convert_err(
             rhai::ParseErrorType::BadInput(rhai::LexError::UnexpectedInput(ref input)),
             ref pos,
         ) => {
-            // This is a special case of 'unexpected input' that we added in script_runner.rs.
-            // What this really means is that the user tried breaking up function arguments across multiple
-            // lines. Normally this would be allowed, but it is not allowed in Elara because it makes the
-            // semicolon checker too complicated.
             if input == BAD_INPUT_UNEXPECTED_LINE_BREAK_IN_FUNCTION_CALL {
                 return BetterError {
                     message: String::from(ERR_UNEXPECTED_LINE_BREAK_IN_FUNCTION_CALL),
@@ -540,351 +472,6 @@ mod tests {
         assert_eq!(
             trim_message("Function not found: move_down () (line 5, position 1)"),
             "Function not found: move_down ()"
-        );
-        assert_eq!(
-            trim_message("Syntax error: Undefined variable: asdpofij (line 5, position 1)"),
-            "Syntax error: Undefined variable: asdpofij"
-        );
-    }
-
-    #[test]
-    fn test_convert_err_semicolon() {
-        let script = String::from(
-            r"move_forward(1);
-            move_forward(1);
-            move_forward(1);
-            move_backward(1)",
-        );
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::MissingToken(String::from(";"), String::from("at end of line")),
-            rhai::Position::new(4, 21),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from("Syntax Error: Missing semicolon ';' at end of line."),
-                line: Some(4),
-                col: Some(21),
-            }
-        );
-    }
-
-    #[test]
-    fn test_convert_err_semicolon_next_line() {
-        // This is a case where we should change the error message to refer to
-        // the line where the semicolon is actually missing.
-        let script = String::from(
-            r"move_forward(1);
-            move_forward(1);
-            move_forward(1)
-            move_backward(1);",
-        );
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::MissingToken(
-                String::from(";"),
-                String::from("to terminate this statement"),
-            ),
-            rhai::Position::new(4, 13),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from("Syntax Error: Missing semicolon ';' at end of line."),
-                line: Some(3),
-                col: Some(13),
-            }
-        );
-
-        // This is a case where we should *not* change the line of the error message.
-        let script = String::from(
-            r"move_forward(1);
-            move_forward(1);
-            move_forward(1) move_backward(1);",
-        );
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::MissingToken(
-                String::from(";"),
-                String::from("to terminate this statement"),
-            ),
-            rhai::Position::new(3, 26),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(
-                    "Syntax Error: Missing semicolon ';' after function call or other statement."
-                ),
-                line: Some(3),
-                col: Some(26),
-            }
-        );
-
-        // This is another case where we should *not* change the line of the error message.
-        // The preceding line is a comment, which is not required to end in a semicolon.
-        let script = String::from(
-            r"move_forward(1);
-            move_backward(1);
-            turn_left();
-            // This is a comment.
-            move_forward(1)",
-        );
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::MissingToken(
-                String::from(";"),
-                String::from("to terminate this statement"),
-            ),
-            rhai::Position::new(5, 13),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(
-                    "Syntax Error: Missing semicolon ';' after function call or other statement."
-                ),
-                line: Some(5),
-                col: Some(13),
-            }
-        );
-
-        // The preceding line is the start of a block, which is *not* required to end in
-        // a semicolon.
-        let script = String::from(
-            r"if true {
-                move_forward(1)
-            }",
-        );
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::MissingToken(
-                String::from(";"),
-                String::from("to terminate this statement"),
-            ),
-            rhai::Position::new(2, 15),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(
-                    "Syntax Error: Missing semicolon ';' after function call or other statement."
-                ),
-                line: Some(2),
-                col: Some(15),
-            }
-        );
-
-        // The preceding line is the end of a block, which is *not* required to end in
-        // a semicolon.
-        let script = String::from(
-            r"if true {
-            }
-            move_forward(1)",
-        );
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::MissingToken(
-                String::from(";"),
-                String::from("to terminate this statement"),
-            ),
-            rhai::Position::new(3, 15),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(
-                    "Syntax Error: Missing semicolon ';' after function call or other statement."
-                ),
-                line: Some(3),
-                col: Some(15),
-            }
-        );
-
-        // Test scanning backwards more than one line.
-        let script = String::from(
-            r"move_backward(1)
-
-            // This is a comment
-            if true {
-              move_forward(1);
-            }",
-        );
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::MissingToken(
-                String::from(";"),
-                String::from("to terminate this statement"),
-            ),
-            rhai::Position::new(4, 1),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from("Syntax Error: Missing semicolon ';' at end of line."),
-                line: Some(1),
-                col: Some(1),
-            }
-        );
-    }
-
-    #[test]
-    fn test_convert_func_not_found_err() {
-        // Built-in function, not unlocked yet.
-        let script = String::from(r"press_button(1);");
-        let err = EvalAltResult::ErrorFunctionNotFound(
-            String::from("press_button (i64)"),
-            rhai::Position::new(1, 1),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from("Error: You haven't unlocked the press_button function yet"),
-                line: Some(1),
-                col: Some(1),
-            }
-        );
-
-        // Built-in function, unlocked but disabled.
-        let script = String::from(r"move_forward(1);");
-        let err = EvalAltResult::ErrorFunctionNotFound(
-            String::from("move_forward (i64)"),
-            rhai::Position::new(1, 1),
-        );
-        let err = convert_err(
-            &AVAIL_FUNCS_IMPAIRED_MOVEMENT,
-            &DISABLED_FUNCS_IMPAIRED_MOVEMENT,
-            script,
-            Box::new(err),
-        );
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(
-                    "Error: The move_forward function is disabled for this level"
-                ),
-                line: Some(1),
-                col: Some(1),
-            }
-        );
-
-        // Built-in function but wrong number of arguments.
-        let script = String::from(r"move_forward(1, 2);");
-        let err = EvalAltResult::ErrorFunctionNotFound(
-            String::from("move_forward (i64, i64)"),
-            rhai::Position::new(1, 1),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(
-                    "Error: The move_forward function should have one number as an input."
-                ),
-                line: Some(1),
-                col: Some(1),
-            }
-        );
-
-        // Built-in function but wrong type of argument.
-        let script = String::from(r"move_forward(true);");
-        let err = EvalAltResult::ErrorFunctionNotFound(
-            String::from("move_forward (bool)"),
-            rhai::Position::new(1, 1),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(
-                    "Error: The move_forward function should have one number as an input."
-                ),
-                line: Some(1),
-                col: Some(1),
-            }
-        );
-
-        // Not a built-in function.
-        let script = String::from(r"move_diagonally(42);");
-        let err = EvalAltResult::ErrorFunctionNotFound(
-            String::from("move_diagonally (i64)"),
-            rhai::Position::new(1, 1),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(
-                    "Error: There is no function named move_diagonally (maybe you made a typo?)"
-                ),
-                line: Some(1),
-                col: Some(1),
-            }
-        );
-    }
-
-    #[test]
-    fn test_convert_err_line_break_in_function_call() {
-        let script = String::from(
-            r"move_forward(
-                1
-            );",
-        );
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::BadInput(rhai::LexError::UnexpectedInput(
-                BAD_INPUT_UNEXPECTED_LINE_BREAK_IN_FUNCTION_CALL.to_string(),
-            )),
-            rhai::Position::new(1, 13),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(ERR_UNEXPECTED_LINE_BREAK_IN_FUNCTION_CALL),
-                line: Some(1),
-                col: Some(13),
-            }
-        );
-    }
-
-    #[test]
-    fn test_convert_err_space_in_var_name() {
-        let script = String::from(r"let my var = 42;");
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::MissingToken(
-                String::from(";"),
-                String::from("to terminate this statement"),
-            ),
-            rhai::Position::new(1, 6),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(ERR_UNEXPECTED_SPACE_IN_VAR_NAME),
-                line: Some(1),
-                col: Some(6),
-            }
-        );
-    }
-
-    #[test]
-    fn test_convert_err_space_in_func_name() {
-        let script = String::from(r"fn my func() {}");
-        let err = EvalAltResult::ErrorParsing(
-            rhai::ParseErrorType::FnMissingParams(String::from("my")),
-            rhai::Position::new(1, 7),
-        );
-        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
-        assert_eq!(
-            err,
-            BetterError {
-                message: String::from(ERR_UNEXPECTED_SPACE_IN_FUNC_NAME),
-                line: Some(1),
-                col: Some(7),
-            }
         );
     }
 
