@@ -445,6 +445,7 @@ pub fn convert_err(
 mod tests {
     use crate::constants::{
         ERR_UNEXPECTED_LINE_BREAK_IN_FUNCTION_CALL, ERR_UNEXPECTED_SPACE_IN_FUNC_NAME,
+        ERR_UNEXPECTED_SPACE_IN_VAR_NAME,
     };
 
     use super::*;
@@ -472,6 +473,356 @@ mod tests {
         assert_eq!(
             trim_message("Function not found: move_down () (line 5, position 1)"),
             "Function not found: move_down ()"
+        );
+
+        assert_eq!(
+            trim_message("Syntax error: Undefined variable: asdpofij (line 5, position 1)"),
+            "Syntax error: Undefined variable: asdpofij"
+        );
+    }
+
+    #[test]
+    fn test_convert_err_semicolon() {
+        let script = String::from(
+            r"move_forward(1);
+            move_forward(1);
+            move_forward(1);
+            move_backward(1)",
+        );
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::MissingToken(String::from(";"), String::from("at end of line")),
+            rhai::Position::new(4, 21),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Синтаксическая ошибка: Пропущена точка с запятой ';' в конце строки.",
+                ),
+                line: Some(4),
+                col: Some(21),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_err_semicolon_next_line() {
+        // This is a case where we should change the error message to refer to
+        // the line where the semicolon is actually missing.
+        let script = String::from(
+            r"move_forward(1);
+            move_forward(1);
+            move_forward(1)
+            move_backward(1);",
+        );
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::MissingToken(
+                String::from(";"),
+                String::from("to terminate this statement"),
+            ),
+            rhai::Position::new(4, 13),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Синтаксическая ошибка: Пропущена точка с запятой ';' в конце строки.",
+                ),
+                line: Some(3),
+                col: Some(13),
+            }
+        );
+
+        // This is a case where we should *not* change the line of the error message.
+        let script = String::from(
+            r"move_forward(1);
+            move_forward(1);
+            move_forward(1) move_backward(1);",
+        );
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::MissingToken(
+                String::from(";"),
+                String::from("to terminate this statement"),
+            ),
+            rhai::Position::new(3, 26),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Синтаксическая ошибка: Пропущена точка с запятой ';' после вызова функции или оператора.",
+                ),
+                line: Some(3),
+                col: Some(26),
+            }
+        );
+
+        // This is another case where we should *not* change the line of the error message.
+        // The preceding line is a comment, which is not required to end in a semicolon.
+        let script = String::from(
+            r"move_forward(1);
+            move_backward(1);
+            turn_left();
+            // This is a comment.
+            move_forward(1)",
+        );
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::MissingToken(
+                String::from(";"),
+                String::from("to terminate this statement"),
+            ),
+            rhai::Position::new(5, 13),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Синтаксическая ошибка: Пропущена точка с запятой ';' после вызова функции или оператора.",
+                ),
+                line: Some(5),
+                col: Some(13),
+            }
+        );
+
+        // The preceding line is the start of a block, which is *not* required to end in
+        // a semicolon.
+        let script = String::from(
+            r"if true {
+                move_forward(1)
+            }",
+        );
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::MissingToken(
+                String::from(";"),
+                String::from("to terminate this statement"),
+            ),
+            rhai::Position::new(2, 15),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Синтаксическая ошибка: Пропущена точка с запятой ';' после вызова функции или оператора.",
+                ),
+                line: Some(2),
+                col: Some(15),
+            }
+        );
+
+        // The preceding line is the end of a block, which is *not* required to end in
+        // a semicolon.
+        let script = String::from(
+            r"if true {
+            }
+            move_forward(1)",
+        );
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::MissingToken(
+                String::from(";"),
+                String::from("to terminate this statement"),
+            ),
+            rhai::Position::new(3, 15),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Синтаксическая ошибка: Пропущена точка с запятой ';' после вызова функции или оператора.",
+                ),
+                line: Some(3),
+                col: Some(15),
+            }
+        );
+
+        // Test scanning backwards more than one line.
+        let script = String::from(
+            r"move_backward(1)
+
+            // This is a comment
+            if true {
+              move_forward(1);
+            }",
+        );
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::MissingToken(
+                String::from(";"),
+                String::from("to terminate this statement"),
+            ),
+            rhai::Position::new(4, 1),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Синтаксическая ошибка: Пропущена точка с запятой ';' в конце строки.",
+                ),
+                line: Some(1),
+                col: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_func_not_found_err() {
+        // Built-in function, not unlocked yet.
+        let script = String::from(r"press_button(1);");
+        let err = EvalAltResult::ErrorFunctionNotFound(
+            String::from("press_button (i64)"),
+            rhai::Position::new(1, 1),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from("Ошибка: Вы ещё не разблокировали функцию press_button"),
+                line: Some(1),
+                col: Some(1),
+            }
+        );
+
+        // Built-in function, unlocked but disabled.
+        let script = String::from(r"move_forward(1);");
+        let err = EvalAltResult::ErrorFunctionNotFound(
+            String::from("move_forward (i64)"),
+            rhai::Position::new(1, 1),
+        );
+        let err = convert_err(
+            &AVAIL_FUNCS_IMPAIRED_MOVEMENT,
+            &DISABLED_FUNCS_IMPAIRED_MOVEMENT,
+            script,
+            Box::new(err),
+        );
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from("Ошибка: Функция move_forward отключена для этого уровня"),
+                line: Some(1),
+                col: Some(1),
+            }
+        );
+
+        // Built-in function but wrong number of arguments.
+        let script = String::from(r"move_forward(1, 2);");
+        let err = EvalAltResult::ErrorFunctionNotFound(
+            String::from("move_forward (i64, i64)"),
+            rhai::Position::new(1, 1),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Ошибка: Функция move_forward должна принимать число в качестве аргумента.",
+                ),
+                line: Some(1),
+                col: Some(1),
+            }
+        );
+
+        // Built-in function but wrong type of argument.
+        let script = String::from(r"move_forward(true);");
+        let err = EvalAltResult::ErrorFunctionNotFound(
+            String::from("move_forward (bool)"),
+            rhai::Position::new(1, 1),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Ошибка: Функция move_forward должна принимать число в качестве аргумента.",
+                ),
+                line: Some(1),
+                col: Some(1),
+            }
+        );
+
+        // Not a built-in function.
+        let script = String::from(r"move_diagonally(42);");
+        let err = EvalAltResult::ErrorFunctionNotFound(
+            String::from("move_diagonally (i64)"),
+            rhai::Position::new(1, 1),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(
+                    "Ошибка: Функции с именем move_diagonally не существует (возможно, опечатка?)",
+                ),
+                line: Some(1),
+                col: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_err_line_break_in_function_call() {
+        let script = String::from(
+            r"move_forward(
+                1
+            );",
+        );
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::BadInput(rhai::LexError::UnexpectedInput(
+                BAD_INPUT_UNEXPECTED_LINE_BREAK_IN_FUNCTION_CALL.to_string(),
+            )),
+            rhai::Position::new(1, 13),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(ERR_UNEXPECTED_LINE_BREAK_IN_FUNCTION_CALL),
+                line: Some(1),
+                col: Some(13),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_err_space_in_var_name() {
+        let script = String::from(r"let my var = 42;");
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::MissingToken(
+                String::from(";"),
+                String::from("to terminate this statement"),
+            ),
+            rhai::Position::new(1, 6),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(ERR_UNEXPECTED_SPACE_IN_VAR_NAME),
+                line: Some(1),
+                col: Some(6),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_err_space_in_func_name() {
+        let script = String::from(r"fn my func() {}");
+        let err = EvalAltResult::ErrorParsing(
+            rhai::ParseErrorType::FnMissingParams(String::from("my")),
+            rhai::Position::new(1, 7),
+        );
+        let err = convert_err(&AVAIL_FUNCS, &NO_DISABLED_FUNCS, script, Box::new(err));
+        assert_eq!(
+            err,
+            BetterError {
+                message: String::from(ERR_UNEXPECTED_SPACE_IN_FUNC_NAME),
+                line: Some(1),
+                col: Some(7),
+            }
         );
     }
 
